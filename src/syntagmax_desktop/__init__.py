@@ -4,4 +4,4 @@ The application consumes the ``syntagmax.api`` embedding library in-process and 
 fully independent of ``syntagmax-gui``.
 """
 
-__version__ = '0.1.0'
+__version__ = '2026.10.10'
