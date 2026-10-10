@@ -71,7 +71,12 @@ def test_open_enables_tabs_and_populates_branches(qtbot, window: MainWindow) -> 
     expected = git_branches.list_branches(str(EXAMPLE_PROJECT))
     assert expected  # guard: the fixture really is a repo with at least one branch.
     combo_items = [window._branch_combo.itemText(i) for i in range(window._branch_combo.count())]
-    assert combo_items == expected
+    # Every local branch is offered; the submodule fixture may be in a detached
+    # HEAD state (it is pinned to a specific commit), in which case the combo
+    # also carries a leading '(HEAD detached ...)' label and is disabled (R4, H-2).
+    assert set(expected).issubset(set(combo_items))
+    detached = any(item.startswith('(HEAD detached') for item in combo_items)
+    assert window._branch_combo.isEnabled() is (not detached)
     assert window._branch_combo.isVisibleTo(window) is True
 
 
@@ -125,3 +130,41 @@ def test_branch_bar_hidden_for_non_repo(qtbot, window: MainWindow, tmp_path: Pat
     qtbot.waitUntil(lambda: window._tabs.isEnabled(), timeout=15000)
     assert git_branches.list_branches(str(destination)) == []
     assert window._branch_combo.isVisibleTo(window) is False
+
+
+def test_open_populates_trace_atypes(qtbot, window: MainWindow) -> None:
+    # Regression for review finding H-1: opening a project must populate the
+    # traceability child/parent selectors via the worker's atypesReady signal.
+    with qtbot.waitSignal(window.worker.atypesReady, timeout=15000) as blocker:
+        window.open_path(str(EXAMPLE_PROJECT))
+    assert blocker.args  # a non-empty atypes payload was emitted.
+
+    qtbot.waitUntil(lambda: bool(window._trace_panel.child_atypes()), timeout=15000)
+    assert window._trace_panel.child_atypes() == list(blocker.args[0])
+
+
+def test_detached_head_labelled_and_combo_disabled(qtbot, window: MainWindow, tmp_path: Path) -> None:
+    # Regression for review finding H-2: a detached HEAD must show the
+    # '(HEAD detached at <sha>)' label and disable branch switching (R4).
+    import shutil
+
+    from git import Repo
+
+    destination = tmp_path / 'detached-project'
+    shutil.copytree(EXAMPLE_PROJECT, destination)
+    repo = Repo.init(destination)
+    repo.index.add(['*'])
+    repo.index.commit('initial')
+    first = repo.head.commit
+    (destination / 'second.txt').write_text('second', encoding='utf-8')
+    repo.index.add(['second.txt'])
+    repo.index.commit('second')
+    repo.git.checkout(first.hexsha)  # detach HEAD at the first commit.
+
+    with qtbot.waitSignal(window.worker.opened, timeout=15000) as blocker:
+        window.open_path(str(destination))
+    assert blocker.args == [True]
+
+    qtbot.waitUntil(lambda: window._branch_combo.isVisibleTo(window), timeout=15000)
+    assert window._branch_combo.currentText().startswith('(HEAD detached')
+    assert window._branch_combo.isEnabled() is False

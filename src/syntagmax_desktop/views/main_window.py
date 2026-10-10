@@ -75,6 +75,13 @@ class MainWindow(QMainWindow):
         #: Guards the branch combo so a programmatic repopulation does not look
         #: like a user-initiated branch switch.
         self._suppress_branch_signal = False
+        #: True when the open project's HEAD is detached, so the branch combo
+        #: stays disabled even after a busy run ends (R4, H-2).
+        self._branch_detached = False
+        #: True once a project has successfully opened; drives panel enablement
+        #: so a busy cycle restores the correct state rather than enabling tabs
+        #: in the empty state (R3, H-3).
+        self._project_open = False
 
         self._worker, self._thread = self._build_worker()
         self._build_actions()
@@ -173,7 +180,8 @@ class MainWindow(QMainWindow):
         # -- End Wave-4 panel attachment point -----------------------------
 
         self.setCentralWidget(self._tabs)
-        self.set_panel('Traceability', TracePanel(self._worker, self))
+        self._trace_panel = TracePanel(self._worker, self)
+        self.set_panel('Traceability', self._trace_panel)
 
     def _build_status_bar(self) -> None:
         """Add a status-bar busy indicator driven by ``busyChanged`` (R9)."""
@@ -183,6 +191,7 @@ class MainWindow(QMainWindow):
     def _connect_worker(self) -> None:
         """Wire the worker's signals to the window's slots."""
         self._worker.opened.connect(self._on_opened)
+        self._worker.atypesReady.connect(self._on_atypes_ready)
         self._worker.failed.connect(self._on_failed)
         self._worker.busyChanged.connect(self._on_busy_changed)
 
@@ -225,11 +234,16 @@ class MainWindow(QMainWindow):
     def _project_root_for(path: str) -> str:
         """Return the project-root directory for ``path`` (for the Markdown base URL, E8).
 
-        ``path`` may be a picked ``config.toml`` file or a project folder; a file
-        resolves to its containing directory, a directory is used as-is.
+        ``path`` may be a picked ``config.toml`` file or a project folder. A file
+        resolves to its containing directory; when that directory is the
+        ``.syntagmax`` config folder, the root is its parent so relative image
+        links resolve against the project root rather than ``.syntagmax`` (M-1).
         """
         candidate = Path(path)
-        return str(candidate.parent if candidate.is_file() else candidate)
+        root = candidate.parent if candidate.is_file() else candidate
+        if root.name == '.syntagmax':
+            root = root.parent
+        return str(root)
 
     def reload_project(self) -> None:
         """Re-open the current project from disk, reflecting external edits (R2a)."""
@@ -272,7 +286,15 @@ class MainWindow(QMainWindow):
             self._remember_recent(self._current_path)
             self._browser_panel.set_project_root(self._project_root_for(self._current_path))
             self._browser_panel.refresh()
+        # Populate the traceability selectors from the project's artifact types
+        # on the worker thread (R7, H-1); without this the trace panel is inert.
+        QMetaObject.invokeMethod(self._worker, 'runAtypes', Qt.ConnectionType.QueuedConnection)
         self._status_label.setText(f'Opened {self._current_path}')
+
+    @Slot(object)
+    def _on_atypes_ready(self, atypes: object) -> None:
+        """Feed discovered artifact types into the traceability selectors (R7, H-1)."""
+        self._trace_panel.set_atypes(list(atypes))
 
     @Slot(str)
     def _on_failed(self, message: str) -> None:
@@ -282,10 +304,21 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _on_busy_changed(self, busy: bool) -> None:
-        """Drive the status-bar indicator and disable actions during a run (R9)."""
+        """Drive the status-bar indicator and mask the UI during a run (R9, E5, H-3).
+
+        Because the worker serialises every request on a single thread, the whole
+        interactive surface — the panel tabs (with their Run buttons and the
+        artifact search box), the open/reload actions, and the branch combo — is
+        disabled while a run is in flight, so secondary requests cannot be queued
+        behind a long analysis or trace.
+        """
         self._open_action.setEnabled(not busy)
         self._reload_action.setEnabled(not busy and self._current_path is not None)
-        self._branch_combo.setEnabled(not busy)
+        self._branch_combo.setEnabled(not busy and not self._branch_detached)
+        # While busy, mask the panel stack; when idle, restore it to the
+        # project-open state (disabled in the empty state) rather than
+        # unconditionally enabling it (R9, E5, H-3).
+        self._tabs.setEnabled(not busy and self._current_path is not None and self._project_open)
         self._status_label.setText('Working…' if busy else 'Ready')
 
     # -- Branch bar -------------------------------------------------------
@@ -300,6 +333,7 @@ class MainWindow(QMainWindow):
         if not branches:
             # Not a git working tree (or no local branches); hide the control
             # rather than report an error (R4).
+            self._branch_detached = False
             self._set_branch_bar_visible(False)
             return
 
@@ -308,14 +342,25 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - a label failure must never block the open flow (R4)
             current = ''
 
+        detached = current.startswith('(HEAD detached')
+        self._branch_detached = detached
+
         self._suppress_branch_signal = True
         try:
             self._branch_combo.clear()
-            self._branch_combo.addItems(branches)
-            if current in branches:
+            if detached:
+                # Show the detached-HEAD label and forbid switching (R4, H-2):
+                # the label is not a real branch, so switching from it is unsafe.
+                self._branch_combo.addItem(current)
+                self._branch_combo.addItems(branches)
                 self._branch_combo.setCurrentText(current)
+            else:
+                self._branch_combo.addItems(branches)
+                if current in branches:
+                    self._branch_combo.setCurrentText(current)
         finally:
             self._suppress_branch_signal = False
+        self._branch_combo.setEnabled(not detached)
         self._set_branch_bar_visible(True)
 
     @Slot(str)
@@ -364,7 +409,12 @@ class MainWindow(QMainWindow):
     # -- Panel enablement -------------------------------------------------
 
     def _set_panels_enabled(self, enabled: bool) -> None:
-        """Enable or disable the whole panel tab stack (R3)."""
+        """Enable or disable the whole panel tab stack (R3).
+
+        Also records whether a project is open so a subsequent busy cycle
+        restores the correct enablement rather than enabling the empty state (H-3).
+        """
+        self._project_open = enabled
         self._tabs.setEnabled(enabled)
 
     # -- Lifecycle --------------------------------------------------------

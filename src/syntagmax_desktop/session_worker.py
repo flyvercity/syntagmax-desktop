@@ -83,6 +83,7 @@ class SessionWorker(QObject):
     opened = Signal(bool)
     analysisReady = Signal(object)
     traceReady = Signal(object)
+    atypesReady = Signal(object)
     queryReady = Signal(object)
     searchReady = Signal(object)
     failed = Signal(str)
@@ -147,6 +148,22 @@ class SessionWorker(QObject):
                 self._fail(exc)
             else:
                 self.analysisReady.emit(result)
+
+    @Slot()
+    def runAtypes(self) -> None:
+        """Discover the project's artifact types and emit ``atypesReady`` (R7, H-1).
+
+        Populates the traceability panel's child/parent selectors on project
+        open; without this the selectors stay empty and the trace panel is
+        inoperable in production.
+        """
+        with self._busy():
+            try:
+                result = core_facade.atypes(self._require_session())
+            except Exception as exc:  # noqa: BLE001 - the worker surfaces every failure as a redacted signal (R9)
+                self._fail(exc)
+            else:
+                self.atypesReady.emit(result)
 
     @Slot(str, str, str, bool)
     def runTrace(self, child: str, parent: str, direction: str, flat: bool) -> None:

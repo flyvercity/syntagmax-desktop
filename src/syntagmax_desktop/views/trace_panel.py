@@ -152,6 +152,10 @@ class TracePanel(QWidget):
             if previous in atypes:
                 combo.setCurrentText(previous)
 
+    def child_atypes(self) -> list[str]:
+        """Return the artifact types currently offered by the child selector (test/diagnostics hook)."""
+        return [self._child_combo.itemText(i) for i in range(self._child_combo.count())]
+
     def run_trace(self) -> None:
         """Dispatch a trace to the worker with ``direction`` and ``flat`` as separate arguments (E2, X3)."""
         child = self._child_combo.currentText()
