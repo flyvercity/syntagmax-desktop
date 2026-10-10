@@ -45,7 +45,9 @@ def main() -> int:
     app.setWindowIcon(icon)
     window = MainWindow()
     window.setWindowIcon(icon)
-    window.show()
+    # Start maximized by default; the resize() in MainWindow sets the restored
+    # (un-maximized) geometry the window returns to when the user un-maximizes.
+    window.showMaximized()
     return app.exec()
 
 
