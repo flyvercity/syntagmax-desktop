@@ -46,6 +46,17 @@ PySide6 loads its platform integration, styling, and image-format support from p
 - `imageformats` — includes `qsvg.dll` for scalable SVG icons and assets.
 - `iconengines` — the companion SVG icon engine.
 
+## Bundled package data files
+
+cx_Freeze bundles `.py`/`.pyc` modules but not the non-Python data files the Syntagmax core reads from disk at import or run time, so `setup_freeze.py` discovers and copies every non-Python file under the `syntagmax` and `syntagmax_desktop` packages into the frozen tree at `lib/<package>/<relative-path>`. This is essential: the core loads its Lark grammars on import via `Path(__file__).parent / '*.lark'`, and without them the frozen build aborts immediately with `FileNotFoundError` (for example `lib/syntagmax/extractors/markdown.lark`). The collected assets include:
+
+- `syntagmax/metamodel.lark` and `syntagmax/extractors/{markdown,text}.lark` — the grammars, read at import.
+- `syntagmax/resources/*.j2`, `syntagmax/resources/agents.yaml`, and `syntagmax/resources/template.dotm` — templates and generation assets.
+- `syntagmax/resources/locales/*/LC_MESSAGES/messages.{mo,po}` — the gettext catalogues used by i18n.
+- `syntagmax_desktop/resources/app_icon.{ico,png}` — the application icon.
+
+Discovery is generic (any file that is not `.py`/`.pyc`), so a newly added data file is bundled automatically without updating the build script. Because these assets are embedded, the installed application is self-contained and never depends on a separately installed Syntagmax core or its version.
+
 ## MSI configuration
 
 The MSI is produced by `bdist_msi` with the product name `Syntagmax Desktop` and a fixed `upgrade_code` of `{CA7AD7F2-157B-4AD6-B2B8-59A3C2F7EE13}`. This GUID is newly minted for the desktop reviewer and is deliberately distinct from the Syntagmax core's `{06253457-3B2E-4FA7-9097-4712F2C507C3}`, so the two products never collide in the Windows Installer upgrade table. The MSI is scoped per user (`all_users = false`) to keep installation out of the forced-UAC path (E4), and it registers both a Start-Menu entry and a desktop shortcut.

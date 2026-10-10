@@ -79,6 +79,45 @@ def _qt_plugin_include_files() -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Package data files — non-Python assets the core reads at runtime.
+# ---------------------------------------------------------------------------
+
+
+def _package_data_include_files() -> list[tuple[str, str]]:
+    """Return ``(source, destination)`` pairs for every non-Python data file.
+
+    cx_Freeze bundles ``.py``/``.pyc`` modules but not the data files that the
+    Syntagmax core loads from disk at import/run time — the Lark grammars
+    (``metamodel.lark``, ``extractors/*.lark``, read via
+    ``Path(__file__).parent / '*.lark'`` on import), the Jinja templates and
+    other ``resources/`` assets, and the compiled gettext catalogues under
+    ``resources/locales/``. Without these the frozen build aborts with a
+    ``FileNotFoundError`` (e.g. ``markdown.lark``) on a clean install.
+
+    We mirror each file into the frozen tree at ``lib/<package>/<relative path>``
+    so the core's ``Path(__file__).parent`` lookups resolve. Discovery is
+    generic (every file that is not ``.py``/``.pyc``), so a newly added data
+    file is picked up automatically rather than needing a hand-maintained list.
+    """
+    include_files: list[tuple[str, str]] = []
+    package_roots = {
+        'syntagmax': Path('syntagmax/src/syntagmax'),
+        'syntagmax_desktop': Path('src/syntagmax_desktop'),
+    }
+    for package, root in package_roots.items():
+        if not root.is_dir():
+            continue
+        for path in root.rglob('*'):
+            if not path.is_file():
+                continue
+            if path.suffix in ('.py', '.pyc'):
+                continue
+            relative = path.relative_to(root).as_posix()
+            include_files.append((os.fspath(path), f'lib/{package}/{relative}'))
+    return include_files
+
+
+# ---------------------------------------------------------------------------
 # MSI shortcut table — Start-Menu and desktop entries.
 # ---------------------------------------------------------------------------
 
@@ -138,11 +177,11 @@ _executables = [
 
 _options = {
     'build_exe': {
-        # Bundle the Qt plugins plus the icon resources so the runtime
-        # QApplication.setWindowIcon call resolves inside the frozen tree.
-        'include_files': _qt_plugin_include_files()
-        + [(os.fspath(_ICON_PATH), 'lib/syntagmax_desktop/resources/app_icon.ico'),
-           (os.fspath(Path('src/syntagmax_desktop/resources/app_icon.png')), 'lib/syntagmax_desktop/resources/app_icon.png')],
+        # Bundle the Qt plugins and every non-Python package data file (core
+        # Lark grammars, Jinja templates, gettext catalogues, and the desktop
+        # icon resources) so both the core's on-disk lookups and the runtime
+        # QApplication.setWindowIcon resolve inside the frozen tree.
+        'include_files': _qt_plugin_include_files() + _package_data_include_files(),
     },
     'bdist_msi': {
         'data': {'Shortcut': _shortcut_table},
