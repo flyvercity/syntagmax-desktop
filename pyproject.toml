@@ -23,6 +23,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/syntagmax_desktop"]
 
+# Ship the binary icon resources (not picked up as Python modules) inside the wheel.
+[tool.hatch.build.targets.wheel.force-include]
+"src/syntagmax_desktop/resources/app_icon.ico" = "syntagmax_desktop/resources/app_icon.ico"
+"src/syntagmax_desktop/resources/app_icon.png" = "syntagmax_desktop/resources/app_icon.png"
+
 # cx_Freeze's `bdist_msi` uses the setuptools/distutils code path (not hatchling),
 # so it needs an explicit resolver for the dynamic `readme` field. The MSI build
 # does not require any PyPI link transformation, so the plain README is used here.
@@ -92,4 +97,5 @@ dev = [
     "pytest-qt>=4.4.0",
     "cx-freeze>=8.6.0",
     "ruff>=0.15.7",
+    "pillow>=10.0.0",
 ]

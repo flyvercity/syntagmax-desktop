@@ -28,6 +28,15 @@ The `setup_freeze.py` entry point is required because two parts of the configura
 
 The executable is built from `src/syntagmax_desktop/app.py` with `base = "gui"`, so a double-click launch opens no console window (R1), and the target is named `syntagmax-desktop`. The `app.py` entry point installs a `sys.excepthook` crash logger before the Qt event loop starts, so an unhandled exception in the frozen build is written to `%LOCALAPPDATA%/Syntagmax/logs/crash.log` (R9a).
 
+## Application icon
+
+The application icon is derived from the Syntagmax core logo (`syntagmax/assets/images/syntagmax_800x800.png`) by `scripts/make_icon.py`, which crops a centred square around the logomark, keeps the brand-green field, applies a subtle rounded-corner mask, and emits two committed assets under `src/syntagmax_desktop/resources/`:
+
+- `app_icon.ico` — a multi-resolution Windows ICO (16/32/48/64/128/256) used for the `.exe` icon and the MSI shortcuts.
+- `app_icon.png` — a 256×256 PNG loaded at runtime by `QApplication.setWindowIcon` (cross-platform), so the window and taskbar carry the brand mark.
+
+At runtime `app.py` also sets an explicit Windows AppUserModelID (`city.flyver.syntagmax.desktop`) so the taskbar shows the application icon rather than the generic Python interpreter icon. Regenerate the assets after a logo change with `uv run python scripts/make_icon.py` (Pillow is a dev dependency). The frozen `Executable(icon=...)` points at `app_icon.ico`, and `setup_freeze.py` copies the resources into the frozen tree so the runtime icon resolves there too.
+
 ## Bundled Qt plugins
 
 PySide6 loads its platform integration, styling, and image-format support from plugin DLLs that are not discovered by cx_Freeze's module scan, so they are bundled explicitly (E4 operational). Without the Windows platform plugin the frozen binary aborts immediately on a clean machine with a `qt.qpa.plugin` error. `setup_freeze.py` resolves and copies the following plugin groups into `lib/PySide6/plugins/`:

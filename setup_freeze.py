@@ -121,20 +121,28 @@ _shortcut_table = [
 # Build invocation.
 # ---------------------------------------------------------------------------
 
+_ICON_PATH = Path('src/syntagmax_desktop/resources/app_icon.ico')
+
 # `base = "gui"` suppresses the console window (R1); the remaining executable
 # metadata (script, target_name) and all build_exe/bdist_msi options are
 # supplied by [tool.cxfreeze] in pyproject.toml and merged in automatically.
+# `icon` sets the .exe icon (and, via the shortcut Icon column, the MSI entries).
 _executables = [
     Executable(
         script='src/syntagmax_desktop/app.py',
         base='gui',
         target_name='syntagmax-desktop',
+        icon=os.fspath(_ICON_PATH),
     ),
 ]
 
 _options = {
     'build_exe': {
-        'include_files': _qt_plugin_include_files(),
+        # Bundle the Qt plugins plus the icon resources so the runtime
+        # QApplication.setWindowIcon call resolves inside the frozen tree.
+        'include_files': _qt_plugin_include_files()
+        + [(os.fspath(_ICON_PATH), 'lib/syntagmax_desktop/resources/app_icon.ico'),
+           (os.fspath(Path('src/syntagmax_desktop/resources/app_icon.png')), 'lib/syntagmax_desktop/resources/app_icon.png')],
     },
     'bdist_msi': {
         'data': {'Shortcut': _shortcut_table},
