@@ -1,0 +1,3 @@
+[submodule "syntagmax"]
+	path = syntagmax
+	url = git@github.com:flyvercity/syntagmax.git
