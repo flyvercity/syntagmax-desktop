@@ -315,3 +315,19 @@ def test_reveal_action_opens_project_root(qtbot, window: MainWindow, monkeypatch
     window.reveal_project_folder()
     assert 'url' in opened
     assert opened['url'].toLocalFile().replace('\\', '/').endswith('obsidian-driver')
+
+
+
+def test_busy_disables_new_open_reload_and_recent(qtbot, window: MainWindow) -> None:
+    # L-1: the busy handler must lock out New/Open/Reload (and Recent) so a
+    # second request cannot be queued behind an in-flight run (R7a, E4, M-1).
+    window._on_busy_changed(True)
+    assert window._new_action.isEnabled() is False
+    assert window._open_action.isEnabled() is False
+    assert window._reload_action.isEnabled() is False
+    assert window._recent_menu.isEnabled() is False
+
+    window._on_busy_changed(False)
+    # When idle, New/Open re-enable unconditionally; Reload stays gated on an open project.
+    assert window._new_action.isEnabled() is True
+    assert window._open_action.isEnabled() is True

@@ -31,6 +31,7 @@ The `build` command writes `build/exe.win-amd64-<pyver>/syntagmax-desktop.exe` w
 
 The reviewer workflow is open, then analysis, traceability, and browse:
 
+- **New Project** scaffolds a fresh Syntagmax project from a chosen folder (via `syntagmax.api.create_project`): it writes the `.syntagmax/` configuration and starter metamodel plus a default `REQ/` input directory, refuses to overwrite an existing project, and then opens the new project straight away. **Reveal Project Folder** opens the current project's root in the operating system file manager so you can add specification files with your editor of choice.
 - **Open** a project by picking its `.syntagmax/config.toml` (or a folder containing it) through a native dialog, reload the current project with `F5`, switch Git branches from the branch bar, and re-open past projects from the Recent Projects menu.
 - **Analysis** runs `Session.analyse()` and renders a metrics strip plus a diagnostics list grouped by location, with severity filter toggles (Error, Warning, and Info) so blocking issues are not buried among informational notices.
 - **Traceability** renders the matrix for a chosen child type, parent type, direction (forward or reverse), and an independent flat toggle, and exports the result to CSV or TSV on disk.
@@ -40,7 +41,7 @@ Every core call runs off the UI thread through a single serialising worker, so t
 
 ## Read-only scope
 
-Syntagmax Desktop is a reviewer, not an editor. There are no create, edit, or delete controls anywhere in v1 — the application only reads a project and renders it. Reviewer sessions open with `allow_dirty_worktree=True` so ordinary working copies with untracked notes or local edits open cleanly, and Git branch checkout is non-destructive and refused when the working tree has uncommitted changes. Authoring remains the responsibility of the Syntagmax command-line tool.
+Syntagmax Desktop is a reviewer, not an editor. The one exception is **New Project**, which performs a single, bounded write: it scaffolds a new project's `.syntagmax/` configuration, starter metamodel, and default `REQ/` directory. There are no artifact create, edit, or delete controls anywhere — once a project is open, the application only reads it and renders it. Reviewer sessions open with `allow_dirty_worktree=True` so ordinary working copies with untracked notes or local edits open cleanly, and Git branch checkout is non-destructive and refused when the working tree has uncommitted changes. Project creation writes files only — it never runs `git init`, commits, or pushes — and all subsequent authoring of artifacts remains the responsibility of the Syntagmax command-line tool.
 
 ## Licensing
 

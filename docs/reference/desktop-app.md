@@ -6,7 +6,18 @@ Syntagmax Desktop is a read-only reviewer for Syntagmax projects. It opens a pro
 
 The workflow is open, then analysis, traceability, and browse. A reviewer opens a project once; the three panels then read that single live `Session`. Every core call — open, analyse, trace, query, and search — runs off the UI thread through a single serialising worker, so the window never freezes during a long operation. A status-bar indicator reflects the worker's busy state, and because the worker serialises requests, a long analyse or trace busy-masks the window so later search or filter requests are not silently queued behind it. Failures are surfaced in a dismissible dialog and the window recovers to its previous state rather than crashing.
 
-The application is a reviewer, not an editor: there are no create, edit, or delete controls anywhere in v1.
+The application is a reviewer, not an editor. Its one write capability is **New Project**, a bounded, one-time scaffold described below; there are no artifact create, edit, or delete controls anywhere, and once a project is open the application only reads it.
+
+## New Project
+
+**New Project** (File → New Project…, `Ctrl+N`, or the toolbar) is the one place the application writes to disk. It scaffolds a fresh Syntagmax project in a chosen folder and then opens it, so a reviewer can start a project without touching the command line.
+
+- **Folder picker.** A native directory picker chooses the target folder. The scaffold is written through `syntagmax.api.create_project`, which produces exactly what the command-line `init` produces — `.syntagmax/config.toml`, `.syntagmax/project.syntagmax`, and `.syntagmax/.gitignore` — plus a default `REQ/` input directory so the layout matches the generated configuration immediately.
+- **Refusal of an existing project.** If the chosen folder already contains a project — detected at either `.syntagmax/config.toml` or a flat `config.toml` — creation is refused and the application offers to open the existing project instead, so a project is never overwritten.
+- **Non-empty folder warning.** If the folder is not empty and is not a project, a confirmation dialog is shown with `No` as the default, so an accidental keypress cannot scaffold into a populated folder. An unreadable or permission-denied folder is reported as a non-fatal dialog rather than crashing.
+- **Off the UI thread, atomic.** The scaffold write runs on the serialising worker thread, and the New, Open, and Reload actions are disabled while it is in flight. The core writes atomically: if any write fails after `.syntagmax/` is created, that directory is rolled back so a failed attempt leaves no broken project behind. Creation writes files only — it never runs `git init`, commits, or pushes.
+- **Auto-open and first run.** On success the new project opens through the normal open flow and is recorded in Recent Projects by its root folder. A freshly scaffolded project has no artifacts yet, so the Browser shows a short hint directing you to add Markdown specification files under `REQ/`.
+- **Reveal Project Folder.** A read-only File-menu action opens the current project's root in the operating-system file manager, so you can add specification files with your editor of choice.
 
 ## Open, branch, reload, and recent projects
 

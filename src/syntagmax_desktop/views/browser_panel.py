@@ -221,6 +221,15 @@ class BrowserPanel(QWidget):
     def _on_query_ready(self, artifacts: list[ArtifactView]) -> None:
         """Adopt a fresh query result, rebuilding the type combo and the list (R8)."""
         self._adopt(artifacts, rebuild_types=True)
+        if not artifacts:
+            # First-run hint for a freshly scaffolded, artifact-free project (R5a):
+            # point the reviewer at the input directory rather than leaving a
+            # silent empty panel.
+            self._fields_view.setHtml(
+                '<p>This project has no artifacts yet. Add Markdown specification '
+                'files under the project\u2019s <code>REQ/</code> directory, then '
+                'reload (F5) to see them here.</p>'
+            )
 
     @Slot(object)
     def _on_search_ready(self, artifacts: list[ArtifactView]) -> None:

@@ -406,6 +406,9 @@ class MainWindow(QMainWindow):
         self._open_action.setEnabled(not busy)
         self._reload_action.setEnabled(not busy and self._current_path is not None)
         self._reveal_action.setEnabled(not busy and self._current_path is not None and self._project_open)
+        # Disable the Recent Projects menu too, so a recent re-open cannot be
+        # queued behind an in-flight run and overwrite the current path (M-1).
+        self._recent_menu.setEnabled(not busy and bool(self._settings_store.recent_projects()))
         self._branch_combo.setEnabled(not busy and not self._branch_detached)
         # While busy, mask the panel stack; when idle, restore it to the
         # project-open state (disabled in the empty state) rather than
