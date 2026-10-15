@@ -168,3 +168,150 @@ def test_detached_head_labelled_and_combo_disabled(qtbot, window: MainWindow, tm
     qtbot.waitUntil(lambda: window._branch_combo.isVisibleTo(window), timeout=15000)
     assert window._branch_combo.currentText().startswith('(HEAD detached')
     assert window._branch_combo.isEnabled() is False
+
+
+
+# --- New Project flow (R3, R4, R5, R5b, R6, R7a) ---
+
+
+def test_new_project_empty_folder_scaffolds_opens_and_records_mru(
+    qtbot, window: MainWindow, settings_store: SettingsStore, tmp_path: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog
+
+    target = tmp_path / 'demo'
+    target.mkdir()
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', staticmethod(lambda *a, **k: str(target)))
+
+    with qtbot.waitSignal(window.worker.opened, timeout=15000) as blocker:
+        window.new_project_dialog()
+    assert blocker.args == [True]
+
+    # The scaffold was written and the project opened through the normal flow.
+    assert (target / '.syntagmax' / 'config.toml').is_file()
+    assert (target / 'REQ').is_dir()
+    qtbot.waitUntil(lambda: window._tabs.isEnabled(), timeout=15000)
+
+    # The MRU records the project ROOT (folder), not the internal config path (E9).
+    qtbot.waitUntil(lambda: bool(settings_store.recent_projects()), timeout=15000)
+    recents = settings_store.recent_projects()
+    assert recents[0] == str(target)
+    assert '.syntagmax' not in Path(recents[0]).name
+
+
+def test_new_project_existing_project_offers_open(
+    qtbot, window: MainWindow, tmp_path: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from syntagmax_desktop import core_facade
+
+    target = tmp_path / 'existing'
+    core_facade.create(target)  # pre-existing project.
+
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', staticmethod(lambda *a, **k: str(target)))
+    asked = {}
+
+    def fake_question(*args, **kwargs):
+        asked['called'] = True
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, 'question', staticmethod(fake_question))
+
+    with qtbot.waitSignal(window.worker.opened, timeout=15000) as blocker:
+        window.new_project_dialog()
+    # The refusal offered Open, and the existing project opened rather than being re-scaffolded.
+    assert asked.get('called') is True
+    assert blocker.args == [True]
+
+
+def test_new_project_flat_config_also_detected(
+    qtbot, window: MainWindow, tmp_path: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    target = tmp_path / 'flat'
+    target.mkdir()
+    (target / 'config.toml').write_text('# flat\n', encoding='utf-8')
+
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', staticmethod(lambda *a, **k: str(target)))
+    questioned = {'n': 0}
+
+    def fake_question(*args, **kwargs):
+        questioned['n'] += 1
+        return QMessageBox.StandardButton.No  # decline opening.
+
+    monkeypatch.setattr(QMessageBox, 'question', staticmethod(fake_question))
+
+    window.new_project_dialog()
+    qtbot.wait(50)
+    # A flat config.toml is recognised as an existing project (dual-config, P7),
+    # so the "open instead?" question was shown and no .syntagmax/ was created.
+    assert questioned['n'] == 1
+    assert not (target / '.syntagmax').exists()
+
+
+def test_new_project_non_empty_warns_and_defaults_to_no(
+    qtbot, window: MainWindow, tmp_path: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    target = tmp_path / 'populated'
+    target.mkdir()
+    (target / 'notes.txt').write_text('hello', encoding='utf-8')
+
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', staticmethod(lambda *a, **k: str(target)))
+
+    captured = {}
+
+    def fake_warning(parent, title, text, buttons, default):
+        captured['default'] = default
+        return QMessageBox.StandardButton.No  # user declines.
+
+    monkeypatch.setattr(QMessageBox, 'warning', staticmethod(fake_warning))
+
+    window.new_project_dialog()
+    qtbot.wait(50)
+    # The warning used No as the safe default (P6) and, declined, no project was written.
+    assert captured.get('default') == QMessageBox.StandardButton.No
+    assert not (target / '.syntagmax').exists()
+
+
+def test_new_project_handles_inaccessible_folder(
+    qtbot, window: MainWindow, tmp_path: Path, monkeypatch
+) -> None:
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    target = tmp_path / 'denied'
+    target.mkdir()
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', staticmethod(lambda *a, **k: str(target)))
+
+    def boom(self):
+        raise PermissionError('access denied')
+
+    monkeypatch.setattr(Path, 'iterdir', boom)
+    criticals = {'n': 0}
+    monkeypatch.setattr(
+        QMessageBox, 'critical',
+        staticmethod(lambda *a, **k: criticals.__setitem__('n', criticals['n'] + 1)),
+    )
+
+    window.new_project_dialog()
+    qtbot.wait(50)
+    # The OSError was caught and surfaced as a dialog rather than crashing (E3).
+    assert criticals['n'] == 1
+
+
+def test_reveal_action_opens_project_root(qtbot, window: MainWindow, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+
+    opened = {}
+    monkeypatch.setattr(QDesktopServices, 'openUrl', staticmethod(lambda url: opened.setdefault('url', url)))
+
+    with qtbot.waitSignal(window.worker.opened, timeout=15000):
+        window.open_path(str(EXAMPLE_PROJECT))
+    qtbot.waitUntil(lambda: window._reveal_action.isEnabled(), timeout=15000)
+
+    window.reveal_project_folder()
+    assert 'url' in opened
+    assert opened['url'].toLocalFile().replace('\\', '/').endswith('obsidian-driver')

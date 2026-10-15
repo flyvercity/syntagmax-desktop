@@ -81,6 +81,7 @@ class SessionWorker(QObject):
     """
 
     opened = Signal(bool)
+    created = Signal(str)
     analysisReady = Signal(object)
     traceReady = Signal(object)
     atypesReady = Signal(object)
@@ -137,6 +138,24 @@ class SessionWorker(QObject):
                 self.opened.emit(False)
             else:
                 self.opened.emit(True)
+
+    @Slot(str)
+    def createProject(self, path: str) -> None:
+        """Scaffold a new project and emit ``created`` with its config path (R2, R7).
+
+        Runs the one-time scaffold write off the UI thread. On success the
+        resolved ``.syntagmax/config.toml`` path is emitted via ``created`` so
+        the window can open the fresh project through its normal flow; on
+        failure a redacted ``failed`` message is emitted and no ``created`` is
+        sent, so the UI never half-opens a project that was not written.
+        """
+        with self._busy():
+            try:
+                config_path = core_facade.create(Path(path))
+            except Exception as exc:  # noqa: BLE001 - the worker surfaces every failure as a redacted signal (R9)
+                self._fail(exc)
+            else:
+                self.created.emit(str(config_path))
 
     @Slot()
     def runAnalyse(self) -> None:

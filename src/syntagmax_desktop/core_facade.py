@@ -20,9 +20,21 @@ from syntagmax.api import (
     Options,
     Session,
     TraceResult,
+    create_project,
     open_project,
     render_trace,
 )
+
+
+def create(path: str | Path) -> Path:
+    """Scaffold a new project at ``path`` and return its ``config.toml`` path (R1).
+
+    A one-line passthrough to :func:`syntagmax.api.create_project`; the UI never
+    touches ``syntagmax.api`` directly. ``FatalError``/``RMSException`` and the
+    filesystem errors raised by the core propagate unchanged for the worker to
+    surface (R1.8, E7).
+    """
+    return create_project(path)
 
 
 def open(config_path: str | Path) -> Session:
