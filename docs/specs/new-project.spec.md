@@ -24,25 +24,31 @@ Acceptance criteria, referenced by the task breakdown.
 
 - **C1 — Public API entry point.** `syntagmax.api` exposes a new function that scaffolds a project at a caller-chosen directory and returns no artifacts (bootstrap is write-only). It wraps the existing `syntagmax.init_cmd.init_project` so the on-disk result is byte-for-byte identical to `syntagmax init`.
 - **C2 — Signature and naming.** The function is `create_project(path: str | Path) -> Path`. It accepts the target project directory (the folder that will contain `.syntagmax/`), creates the scaffold there, and returns the resolved path to the written `config.toml`. The name `create_project` (rather than mirroring the internal `init_project`) is chosen for a host-facing verb; see D1.
-- **C3 — Safety: refuse existing project.** If the target already contains a `.syntagmax/config.toml`, `create_project` raises a `FatalError` (the core's existing exception type) rather than overwriting. Scaffolding never clobbers an existing project.
+- **C3 — Safety: refuse existing project (both config locations).** If the target already contains **either** `.syntagmax/config.toml` **or** a flat `config.toml` at the project root, `create_project` raises a `FatalError` (the core's existing exception type) rather than overwriting or scaffolding a conflicting dual-configuration structure. Both locations are checked because `core_facade.open` accepts either, so a flat-root project must be detected too (critique P7, E2). Scaffolding never clobbers an existing project.
 - **C4 — Target directory creation.** If the target directory does not exist, `create_project` creates it (including parents). An existing non-empty, non-project directory is permitted at the core layer; the "warn before scaffolding into a non-empty folder" decision is a UI concern (R4), not a core refusal.
-- **C5 — Exception propagation.** `OSError`/`PermissionError` from the underlying writes propagate unchanged, consistent with the rest of `syntagmax.api` (e.g. `open_project` propagates `FatalError`/`RMSException` without swallowing them).
-- **C6 — Core test coverage.** A core test scaffolds into a `tmp_path`, asserts the three files exist with the expected names, asserts the project opens via `open_project` and analyses cleanly, and asserts the refusal path (C3) raises.
-- **C7 — Core reference doc.** The core's embedding-API reference documents the new entry point.
+- **C5 — Exception propagation and atomic rollback.** `OSError`/`PermissionError` from the underlying writes propagate unchanged, consistent with the rest of `syntagmax.api` (e.g. `open_project` propagates `FatalError`/`RMSException` without swallowing them). Additionally, scaffolding must not leave a half-written project: if any write fails after `.syntagmax/` is created, `create_project` removes the `.syntagmax/` directory it created before re-raising, so a failed attempt does not leave a broken project that both blocks a retry (C3) and fails to open (critique E1, X1). The rollback only removes scaffold artefacts `create_project` itself created.
+- **C6 — Reject filesystem root.** `create_project` refuses to scaffold at a filesystem root (where `target == target.parent`), raising `FatalError`, so an accidental root selection cannot write a `.syntagmax/` into a system root (critique E5).
+- **C7 — Default input directory.** `create_project` also creates the default input directory `REQ/` (matching the `[[input]] dir = "REQ"` block that `generate_toml` writes), so the scaffolded structure matches the generated config immediately and the browser is not confronted with a missing input directory (critique P4).
+- **C8 — Core test coverage.** A core test scaffolds into a `tmp_path`, asserts the scaffold files (`.syntagmax/config.toml`, `.syntagmax/project.syntagmax`, `.syntagmax/.gitignore`) and the `REQ/` directory exist, asserts the project opens via `open_project` and analyses cleanly, and asserts the refusal path (C3) raises for both an existing `.syntagmax/config.toml` **and** a flat `config.toml`.
+- **C9 — Core reference doc.** The core's embedding-API reference documents the new entry point.
 
 ### Desktop (host) requirements
 
 - **R1 — Facade seam.** `core_facade` gains a `create(path)` function that calls `syntagmax.api.create_project` and returns the resolved `config.toml` path, so the UI never touches `syntagmax.api` directly (mirrors the existing `core_facade.open`).
 - **R2 — Worker slot.** `SessionWorker` gains a `createProject(path)` slot, bracketed by the existing `_busy()` guard and routing every exception through `_fail()` (redacted), consistent with every other worker slot. On success it emits a new `created(str)` signal carrying the resolved `config.toml` path.
 - **R3 — New Project command.** The main window adds a "New Project…" action, wired into both the File menu (near Open) and the toolbar. It is always enabled (unlike panel actions, it does not require an open project).
-- **R4 — Folder picker and safety checks.** "New Project…" opens a native directory picker. After a folder is chosen, and before dispatching to the worker, the window:
-  - refuses (with a dialog offering to *open* instead) when the folder already contains `.syntagmax/config.toml`;
-  - warns and requires confirmation when the folder is non-empty but is not a Syntagmax project;
+- **R4 — Folder picker and safety checks.** "New Project…" opens a native directory picker (title text explicitly guides the reviewer to choose or create an empty target folder). After a folder is chosen, and before dispatching to the worker, the window:
+  - refuses (with a dialog offering to *open* instead) when the folder already contains **either** `.syntagmax/config.toml` **or** a flat `config.toml` (critique P7);
+  - warns and requires confirmation when the folder is non-empty but is not a Syntagmax project, with the **`No` button as the explicit default** so an accidental Enter/Space does not scaffold into a populated folder (critique P6);
+  - guards the non-empty check against `OSError`/`PermissionError` (e.g. an unreadable folder or a disconnected network share) and surfaces a non-fatal error dialog rather than letting the exception reach the UI event loop (critique E3);
   - proceeds silently for an empty folder or a newly named subfolder.
 - **R5 — Auto-open after creation.** On `created`, the window opens the freshly scaffolded project through the existing `open_path` flow, so the reviewer lands in the normal analysis/browse view with no extra interaction.
-- **R6 — Recent Projects integration.** The newly created project is recorded in the MRU store via the existing `open_path` → `_remember_recent` path (no separate code path required once R5 reuses `open_path`).
+- **R5a — First-run guidance.** Opening a scaffolded (artifact-count-zero) project shows a lightweight empty-state hint directing the reviewer to add Markdown specification files under `REQ/`. This reuses the existing panels' empty rendering where possible and adds no write capability (critique P1, X2).
+- **R5b — Reveal project folder.** The File menu gains a read-only "Reveal Project Folder" action (enabled when a project is open) that opens the project root in the OS file manager via `QDesktopServices.openUrl`, closing the loop between scaffold and external authoring. This is a navigation convenience, not a write (critique P3, X2).
+- **R6 — Recent Projects integration (project root, not config path).** The newly created project is recorded in the MRU store via the existing `open_path` → `_remember_recent` path. To keep the MRU consistent with folder-based opens (which store a directory), `_on_created` passes the **project root directory**, not the internal `.syntagmax/config.toml` path, to `open_path`; `core_facade.open` resolves the folder to its config (critique E9).
 - **R7 — Off-UI-thread.** The scaffold write runs on the worker thread via a queued `QMetaObject.invokeMethod`, never on the UI thread, consistent with R9 of the v1 spec.
-- **R8 — Desktop test coverage.** Tests cover the facade seam (scaffold into `tmp_path`, assert the files and a clean open), the worker slot (busy bracketing, `created` emission, failure redaction), and the safety checks (R4 refusal and warning branches), using the existing Qt test harness and `SettingsStore` injection pattern.
+- **R7a — Action lockout during worker runs.** `_on_busy_changed` disables `_new_action`, `_open_action`, and `_reload_action` (and their toolbar buttons) whilst the worker is busy, so a reviewer cannot queue a second New/Open/Reload behind an in-flight creation and desynchronise `_current_path` (critique E4, X3).
+- **R8 — Desktop test coverage.** Tests cover the facade seam (scaffold into `tmp_path`, assert the files, the `REQ/` directory, and a clean open), the worker slot (busy bracketing, `created` emission, failure redaction), and the safety checks: the R4 refusal branch (both `.syntagmax/config.toml` **and** flat `config.toml`), the non-empty warning branch, the permission-error guard, and that New/Open/Reload are disabled during a busy run (critique E7). Use the existing Qt test harness and `SettingsStore` injection pattern.
 - **R9 — Documentation.** `README.md` and `docs/reference/desktop-app.md` are updated. The README's "Read-only scope" section is amended to acknowledge the single bootstrap write precisely (creation only; review remains read-only). This satisfies the project rule that every spec includes a documentation task covering README **and** `docs/reference/`.
 
 ### Cross-cutting
@@ -100,16 +106,16 @@ flowchart TD
     User[Reviewer] -->|New Project…| MW[MainWindow]
     MW -->|native dir picker| Pick[Chosen folder]
     Pick --> Checks{Safety checks R4}
-    Checks -->|has .syntagmax/config.toml| Refuse[Refuse: offer Open instead]
-    Checks -->|non-empty, not a project| Warn[Warn + confirm]
+    Checks -->|has .syntagmax/config.toml or flat config.toml| Refuse[Refuse: offer Open instead]
+    Checks -->|non-empty, not a project| Warn[Warn + confirm; default No]
     Checks -->|empty / confirmed| Dispatch[queued invokeMethod]
     Dispatch --> Worker[SessionWorker.createProject]
     Worker -->|_busy + _fail| Facade[core_facade.create]
     Facade --> API[syntagmax.api.create_project]
-    API --> Init[init_cmd.init_project + C3 guard]
-    Init --> Disk[(.syntagmax/config.toml,\nproject.syntagmax, .gitignore)]
+    API --> Init[dual-config/root guard + init_cmd.init_project + rollback]
+    Init --> Disk[(.syntagmax/config.toml,\nproject.syntagmax, .gitignore, REQ/)]
     Worker -->|created path| MW
-    MW -->|open_path path| OpenFlow[existing open flow]
+    MW -->|open_path project root| OpenFlow[existing open flow]
     OpenFlow --> MRU[Recent Projects]
     OpenFlow --> Panels[Analysis / Trace / Browser]
 ```
@@ -122,27 +128,44 @@ Add to `syntagmax/src/syntagmax/api.py`:
 from syntagmax.errors import FatalError
 
 def create_project(path: str | Path) -> Path:
-    """Scaffold a new Syntagmax project at ``path`` and return its config path (C1-C5).
+    """Scaffold a new Syntagmax project at ``path`` and return its config path (C1-C9).
 
     Writes ``.syntagmax/config.toml``, ``.syntagmax/project.syntagmax``, and
     ``.syntagmax/.gitignore`` identically to the ``init`` CLI command by
-    delegating to :func:`syntagmax.init_cmd.init_project`. Refuses to overwrite
-    an existing project: if ``<path>/.syntagmax/config.toml`` already exists a
-    :class:`FatalError` is raised (C3). The target directory is created when
-    absent (C4). ``OSError``/``PermissionError`` from the writes propagate (C5).
+    delegating to :func:`syntagmax.init_cmd.init_project`, and creates the
+    default ``REQ/`` input directory (C7). Refuses to overwrite an existing
+    project: if either ``<path>/.syntagmax/config.toml`` or a flat
+    ``<path>/config.toml`` already exists a :class:`FatalError` is raised (C3),
+    as is scaffolding at a filesystem root (C6). The target directory is created
+    when absent (C4). If any write fails after ``.syntagmax/`` is created, the
+    created ``.syntagmax/`` is removed before the exception propagates so a
+    failed attempt leaves no broken project (C5).
     """
+    import shutil
     from syntagmax.init_cmd import init_project
 
     target = Path(path).resolve()
-    config_path = target / '.syntagmax' / 'config.toml'
-    if config_path.exists():
+    if target == target.parent:
+        raise FatalError('Cannot scaffold a Syntagmax project at a filesystem root')
+    if (target / '.syntagmax' / 'config.toml').exists() or (target / 'config.toml').exists():
         raise FatalError(f'A Syntagmax project already exists at {target}')
+
+    syntagmax_dir = target / '.syntagmax'
+    syntagmax_preexisting = syntagmax_dir.exists()
     target.mkdir(parents=True, exist_ok=True)
-    init_project(str(target))
-    return config_path
+    try:
+        init_project(str(target))
+        (target / 'REQ').mkdir(exist_ok=True)
+    except Exception:
+        # Roll back only the scaffold directory this call created (C5).
+        if not syntagmax_preexisting and syntagmax_dir.is_dir():
+            shutil.rmtree(syntagmax_dir, ignore_errors=True)
+        raise
+
+    return syntagmax_dir / 'config.toml'
 ```
 
-Rationale: `init_project` already creates `.syntagmax/` and writes the three files relative to its `cwd` argument, so passing the resolved target directory yields the identical scaffold. The only added behaviour is the C3 pre-check and C4 directory creation.
+Rationale: `init_project` already creates `.syntagmax/` and writes the three files relative to its `cwd` argument, so passing the resolved target directory yields the identical scaffold. The added behaviour is the dual-config and root pre-checks (C3, C6), the `REQ/` directory (C7), and the rollback-on-failure guard (C5). `init_project` itself is not modified.
 
 ### Desktop: facade seam
 
@@ -175,63 +198,93 @@ def createProject(self, path: str) -> None:
 
 ### Desktop: main window wiring
 
-- `_build_actions`: add `self._new_action = QAction('&New Project…', self)` with `QKeySequence.StandardKey.New`, connected to `self.new_project_dialog`.
-- `_build_toolbar` / `_build_menu`: add `self._new_action` before Open.
+- `_build_actions`: add `self._new_action = QAction('&New Project…', self)` with `QKeySequence.StandardKey.New`, connected to `self.new_project_dialog`; add `self._reveal_action = QAction('Reveal Project &Folder', self)` (disabled until a project opens), connected to `self.reveal_project_folder` (R5b).
+- `_build_toolbar` / `_build_menu`: add `self._new_action` before Open; add `self._reveal_action` to the File menu.
 - `_connect_worker`: connect `self._worker.created` to `self._on_created`.
+- `_on_busy_changed`: also disable `self._new_action`, `self._open_action`, and `self._reload_action` whilst busy (R7a).
 - New methods:
 
 ```python
 def new_project_dialog(self) -> None:
-    folder = QFileDialog.getExistingDirectory(self, 'New Syntagmax Project')
+    folder = QFileDialog.getExistingDirectory(
+        self, 'New Syntagmax Project — choose or create an empty folder')
     if not folder:
         return
     target = Path(folder)
-    if (target / '.syntagmax' / 'config.toml').is_file():
-        # R4 refusal: offer to open the existing project instead.
-        if QMessageBox.question(self, 'Project exists',
-                'This folder already contains a Syntagmax project. Open it instead?')\
-                == QMessageBox.StandardButton.Yes:
+    # R4: refuse an existing project at either config location (P7).
+    if (target / '.syntagmax' / 'config.toml').is_file() or (target / 'config.toml').is_file():
+        if QMessageBox.question(
+            self, 'Project exists',
+            'This folder already contains a Syntagmax project. Open it instead?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        ) == QMessageBox.StandardButton.Yes:
             self.open_path(str(target))
         return
-    if any(target.iterdir()):
-        # R4 warning: non-empty, not a project.
-        if QMessageBox.warning(self, 'Folder not empty',
-                'This folder is not empty and is not a Syntagmax project. '
-                'Create a project here anyway?',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)\
-                != QMessageBox.StandardButton.Yes:
+    # R4: guard the non-empty inspection against OS/permission errors (E3).
+    try:
+        non_empty = target.is_dir() and any(target.iterdir())
+    except OSError as exc:
+        QMessageBox.critical(self, 'Access error', f'Cannot access folder: {exc}')
+        return
+    if non_empty:
+        # R4: default to No so an accidental keypress never scaffolds (P6).
+        if QMessageBox.warning(
+            self, 'Folder not empty',
+            'This folder is not empty and is not a Syntagmax project. '
+            'Create a project here anyway?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
             return
     QMetaObject.invokeMethod(self._worker, 'createProject',
         Qt.ConnectionType.QueuedConnection, Q_ARG(str, str(target)))
 
+def reveal_project_folder(self) -> None:
+    """Open the current project root in the OS file manager (R5b, read-only)."""
+    if self._current_path is None:
+        return
+    root = self._project_root_for(self._current_path)
+    QDesktopServices.openUrl(QUrl.fromLocalFile(root))
+
 @Slot(str)
 def _on_created(self, config_path: str) -> None:
-    """Open the freshly scaffolded project through the normal flow (R5, R6)."""
-    self.open_path(config_path)
+    """Open the freshly scaffolded project through the normal flow (R5, R6, E9).
+
+    The project *root* (the parent of ``.syntagmax``) is passed to ``open_path``
+    rather than the raw ``config.toml`` path, so the MRU stores a folder,
+    consistent with folder-based opens; ``core_facade.open`` resolves it.
+    """
+    root = Path(config_path).parent.parent  # <root>/.syntagmax/config.toml -> <root>
+    self.open_path(str(root))
 ```
 
-Because `_on_created` calls `open_path`, the MRU recording (R6) and panel refresh happen through the existing, already-tested open flow — no duplication.
+Because `_on_created` calls `open_path`, the MRU recording (R6) and panel refresh happen through the existing, already-tested open flow — no duplication. The empty-state hint (R5a) is driven by the normal open path when the artifact count is zero.
 
 ## Design Decisions and Assumptions
 
 - **D1 — Name `create_project`.** Chosen over mirroring `init_project` because the public surface already uses host-facing verbs, and because the seed's workflow is phrased as "create a new project". A project *name* parameter is deliberately **not** added in this iteration: the core scaffold has no notion of a project name (the folder is the project), and adding one would be scope creep beyond the seed's "optionally name it". Deferred to `docs/feedback/` if desired.
 - **D2 — Core refuses overwrite; UI adds friendlier affordances.** C3 makes the refusal authoritative at the core layer (so any host is protected), whilst R4 gives the desktop a nicer "open instead" path before it ever dispatches.
-- **D3 — No Git bootstrap.** Matching the core's "core does NOT commit" rule, the scaffold writes files only. Whether to `git init` a new project is left to the reviewer/CLI and recorded as a possible follow-up.
+- **D3 — No Git bootstrap.** Matching the core's "core does NOT commit" rule, the scaffold writes files only. Whether to `git init` a new project is left to the reviewer/CLI and recorded as a possible follow-up. The critique's suggestion of an optional "Initialise Git repository" checkbox (P5) is noted but deferred: it would add a host-layer write beyond the agreed bounded scope and is better evaluated once the bootstrap flow is in use.
 - **D4 — Reuse the open flow for auto-open.** Rather than a bespoke post-create path, `_on_created` funnels into `open_path`, inheriting MRU, branch-bar, and panel behaviour unchanged (R10).
+- **D5 — Directory picker over parent+name (deferred).** The critique recommends a parent-folder + project-name dialog (P2). This iteration keeps `QFileDialog.getExistingDirectory` with explicit guiding title text (R4); a richer parent+name flow is a reasonable follow-up but is scope creep for the first bootstrap capability. Captured for `docs/feedback/`.
+- **D6 — Imports.** `reveal_project_folder` uses `QDesktopServices` and `QUrl` (`PySide6.QtGui`/`PySide6.QtCore`), added to the existing `main_window.py` imports.
+- **D7 — Success criteria (P8).** Targets for this feature: a clean, byte-identical scaffold on any writable path (matching `syntagmax init`); no unhandled exception reaches the UI event loop (every failure arrives as a redacted `failed` dialog); and dispatch-to-open on a local filesystem completes within a couple of hundred milliseconds. These are verified behaviourally by the R8/C8 tests rather than by runtime telemetry (the desktop app ships no metrics backend).
 
 ## Task Breakdown
 
 ### Task 1 — Core: `create_project` on a new submodule branch
 
-- **Objective.** Add `create_project` to `syntagmax.api` on a new branch in the `syntagmax` submodule based on the current pinned revision (R11, C1–C5).
-- **Guidance.** Create branch `feat/api-create-project` from the submodule's current HEAD. Implement `create_project` in `syntagmax/src/syntagmax/api.py` per the sketch above, importing `FatalError` from `syntagmax.errors` and `init_project` from `syntagmax.init_cmd`. Do not modify `init_project` itself.
-- **Tests (C6).** In `syntagmax/tests/test_api.py` add: scaffold into `tmp_path`, assert `.syntagmax/config.toml`, `.syntagmax/project.syntagmax`, and `.syntagmax/.gitignore` exist; assert `open_project(returned_path)` yields a `Session` whose `analyse()` runs without raising; assert a second `create_project` on the same path raises `FatalError`.
+- **Objective.** Add `create_project` to `syntagmax.api` on a new branch in the `syntagmax` submodule based on the current pinned revision (R11, C1–C9).
+- **Guidance.** Create branch `feat/api-create-project` from the submodule's current HEAD. Implement `create_project` in `syntagmax/src/syntagmax/api.py` per the (hardened) sketch above: dual-config and filesystem-root refusal (C3, C6), the default `REQ/` directory (C7), and rollback of the created `.syntagmax/` on write failure (C5). Import `FatalError` from `syntagmax.errors` and `init_project` from `syntagmax.init_cmd`. Do not modify `init_project` itself.
+- **Tests (C8).** In `syntagmax/tests/test_api.py` add: scaffold into `tmp_path`, assert `.syntagmax/config.toml`, `.syntagmax/project.syntagmax`, `.syntagmax/.gitignore`, and the `REQ/` directory exist; assert `open_project(returned_path)` yields a `Session` whose `analyse()` runs without raising; assert a second `create_project` on the same path raises `FatalError`; assert `create_project` also raises `FatalError` when a flat `config.toml` (no `.syntagmax/`) already exists.
+- **Remote.** Push `feat/api-create-project` to the `syntagmax` remote so the superproject's submodule pointer resolves for CI and other clones (critique E8). Pushing is a remote action — flag it for confirmation at implementation time rather than performing it silently.
 - **Demo.** `cd syntagmax && uv run pytest tests/test_api.py -k create_project -q`.
 
-### Task 2 — Core: embedding-API reference doc (C7)
+### Task 2 — Core: embedding-API reference doc (C9)
 
 - **Objective.** Document `create_project` in the core's embedding-API reference.
-- **Guidance.** Add an entry to `syntagmax/docs/reference/embedding-api.md` (same file referenced by the embedding-API notes) describing the signature, the overwrite refusal, and the files written. Relative paths only; no hard-wrapping.
+- **Guidance.** Add an entry to `syntagmax/docs/reference/embedding-api.md` (same file referenced by the embedding-API notes) describing the signature, the dual-config and filesystem-root refusals, the `REQ/` directory, the rollback-on-failure behaviour, and the files written. Relative paths only; no hard-wrapping.
 - **Demo.** Visual review of the rendered section.
 
 ### Task 3 — Desktop: facade + worker (R1, R2, R7)
@@ -241,12 +294,12 @@ Because `_on_created` calls `open_path`, the MRU recording (R6) and panel refres
 - **Tests (R8, partial).** Facade: scaffold into `tmp_path`, assert files and a clean `core_facade.open`. Worker: drive `createProject` on the worker, assert `busyChanged` brackets the run, `created` carries the config path, and a failure (e.g. creating into an existing project) emits a redacted `failed` and no `created`.
 - **Demo.** `uv run pytest tests/ -k "create or worker" -q`.
 
-### Task 4 — Desktop: main window command, picker, safety checks, auto-open (R3–R6)
+### Task 4 — Desktop: main window command, picker, safety checks, auto-open (R3–R7a)
 
-- **Objective.** Wire the "New Project…" action, directory picker, R4 safety checks, dispatch, and `_on_created` auto-open.
-- **Guidance.** Follow the sketches above. Add the action to both the toolbar and the File menu before Open; connect `worker.created`. Reuse `open_path` in `_on_created` so MRU and panels come for free.
-- **Tests (R8).** With an injected `SettingsStore`, assert: choosing an empty folder dispatches `createProject` and, on `created`, the project opens and is recorded in MRU; the refusal branch (existing project) offers Open; the warning branch (non-empty) blocks dispatch unless confirmed. Use signal spies / `qtbot`-style waits consistent with the existing window tests.
-- **Demo.** `uv run syntagmax-desktop`, then File → New Project… into an empty folder; the app scaffolds and opens it.
+- **Objective.** Wire the "New Project…" and "Reveal Project Folder" actions, the directory picker, R4 safety checks, dispatch, `_on_created` auto-open, the first-run empty hint (R5a), and the busy action-lockout (R7a).
+- **Guidance.** Follow the hardened sketches above. Add New Project to both the toolbar and the File menu before Open; add Reveal Project Folder to the File menu (enabled only when a project is open); connect `worker.created`; extend `_on_busy_changed` to disable New/Open/Reload while busy; import `QDesktopServices`/`QUrl`. Reuse `open_path` in `_on_created` (passing the project root, E9) so MRU and panels come for free.
+- **Tests (R8).** With an injected `SettingsStore`, assert: choosing an empty folder dispatches `createProject` and, on `created`, the project opens and the project **root** is recorded in MRU; the refusal branch offers Open for both an existing `.syntagmax/config.toml` and a flat `config.toml` (P7); the non-empty warning branch blocks dispatch unless confirmed; a folder-inspection `OSError` surfaces an error dialog rather than raising (E3); and New/Open/Reload are disabled while the worker is busy (E4). Use signal spies / `qtbot`-style waits consistent with the existing window tests.
+- **Demo.** `uv run syntagmax-desktop`, then File → New Project… into an empty folder; the app scaffolds and opens it, and Reveal Project Folder opens it in the file manager.
 
 ### Task 5 — Documentation (R9)
 
@@ -257,7 +310,7 @@ Because `_on_created` calls `open_path`, the MRU recording (R6) and panel refres
 ### Task 6 — Submodule pointer + verification
 
 - **Objective.** Point the desktop app's `syntagmax` submodule at the new branch commit and run the whole suite.
-- **Guidance.** After Task 1 lands on the submodule branch, update the superproject's submodule reference to that commit so `uv run` resolves the new API. Run `uv sync`, then `uv run pytest` for the desktop app and the core suite.
+- **Guidance.** After Task 1 lands and is **pushed** on the submodule branch (critique E8 — otherwise CI and fresh clones cannot resolve the pointer), update the superproject's submodule reference to that commit so `uv run` resolves the new API. Run `uv sync`, then `uv run pytest` for the desktop app and the core suite.
 - **Demo.** Full `uv run pytest` green on both; `uv run syntagmax-desktop` launches and New Project works end-to-end.
 
 ## Parallelisation Notes
