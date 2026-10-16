@@ -124,3 +124,37 @@ def test_redact_masks_credentials_and_tokens():
 
     long_token = 'abcdef0123456789abcdef0123456789abcd'
     assert long_token not in _redact(f'auth rejected token {long_token}')
+
+
+
+def test_create_project_emits_created_with_config_path(qtbot, worker, tmp_path: Path):
+    target = tmp_path / 'demo'
+    with qtbot.waitSignal(worker.created, timeout=10000) as blocker:
+        _invoke(worker, 'createProject', str(target))
+    config_path = blocker.args[0]
+    assert config_path.endswith('config.toml')
+    assert (target / '.syntagmax' / 'config.toml').is_file()
+    assert (target / 'REQ').is_dir()
+
+
+def test_create_project_busy_brackets_the_run(qtbot, worker, tmp_path: Path):
+    states: list[bool] = []
+    worker.busyChanged.connect(states.append)
+    with qtbot.waitSignal(worker.created, timeout=10000):
+        _invoke(worker, 'createProject', str(tmp_path / 'demo'))
+    assert states[0] is True
+    assert states[-1] is False
+
+
+def test_create_project_existing_emits_failed_and_no_created(qtbot, worker, tmp_path: Path):
+    target = tmp_path / 'demo'
+    # First creation succeeds.
+    with qtbot.waitSignal(worker.created, timeout=10000):
+        _invoke(worker, 'createProject', str(target))
+
+    created_again: list[str] = []
+    worker.created.connect(created_again.append)
+    with qtbot.waitSignal(worker.failed, timeout=10000) as blocker:
+        _invoke(worker, 'createProject', str(target))
+    assert isinstance(blocker.args[0], str) and blocker.args[0]
+    assert created_again == []

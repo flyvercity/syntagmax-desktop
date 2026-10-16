@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Q_ARG, QMetaObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import Q_ARG, QMetaObject, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -113,10 +113,18 @@ class MainWindow(QMainWindow):
         return worker, thread
 
     def _build_actions(self) -> None:
-        """Create the Open, Reload, and Quit actions."""
+        """Create the New, Open, Reveal, Reload, and Quit actions."""
+        self._new_action = QAction('&New Project…', self)
+        self._new_action.setShortcut(QKeySequence.StandardKey.New)
+        self._new_action.triggered.connect(self.new_project_dialog)
+
         self._open_action = QAction('&Open Project…', self)
         self._open_action.setShortcut(QKeySequence.StandardKey.Open)
         self._open_action.triggered.connect(self.open_project_dialog)
+
+        self._reveal_action = QAction('Reveal Project &Folder', self)
+        self._reveal_action.setEnabled(False)
+        self._reveal_action.triggered.connect(self.reveal_project_folder)
 
         self._reload_action = QAction('&Reload', self)
         self._reload_action.setShortcut(QKeySequence(Qt.Key.Key_F5))
@@ -131,6 +139,7 @@ class MainWindow(QMainWindow):
         """Build the toolbar carrying Open, Reload, and the branch combo."""
         toolbar = QToolBar('Main', self)
         toolbar.setObjectName('mainToolbar')
+        toolbar.addAction(self._new_action)
         toolbar.addAction(self._open_action)
         toolbar.addAction(self._reload_action)
         toolbar.addSeparator()
@@ -151,11 +160,13 @@ class MainWindow(QMainWindow):
     def _build_menu(self) -> None:
         """Build the File menu with Open, Recent Projects, Reload, and Quit."""
         file_menu = self.menuBar().addMenu('&File')
+        file_menu.addAction(self._new_action)
         file_menu.addAction(self._open_action)
 
         self._recent_menu = QMenu('Open &Recent', self)
         file_menu.addMenu(self._recent_menu)
 
+        file_menu.addAction(self._reveal_action)
         file_menu.addAction(self._reload_action)
         file_menu.addSeparator()
         file_menu.addAction(self._quit_action)
@@ -191,6 +202,7 @@ class MainWindow(QMainWindow):
     def _connect_worker(self) -> None:
         """Wire the worker's signals to the window's slots."""
         self._worker.opened.connect(self._on_opened)
+        self._worker.created.connect(self._on_created)
         self._worker.atypesReady.connect(self._on_atypes_ready)
         self._worker.failed.connect(self._on_failed)
         self._worker.busyChanged.connect(self._on_busy_changed)
@@ -229,6 +241,70 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._dispatch_open(path)
         self.openRequested.emit(path)
+
+    def new_project_dialog(self) -> None:
+        """Pick a target folder, run safety checks, and scaffold a new project (R3, R4).
+
+        The folder is validated on the UI thread before any dispatch: an
+        existing project at either config location is refused (offering to open
+        it instead), a non-empty non-project folder requires confirmation (with
+        ``No`` as the safe default), and the non-empty inspection is guarded
+        against OS/permission errors. The scaffold write itself runs off the UI
+        thread via the worker (R7).
+        """
+        folder = QFileDialog.getExistingDirectory(
+            self, 'New Syntagmax Project — choose or create an empty folder'
+        )
+        if not folder:
+            return
+        target = Path(folder)
+
+        # R4: refuse an existing project at either config location (P7).
+        if (target / '.syntagmax' / 'config.toml').is_file() or (target / 'config.toml').is_file():
+            answer = QMessageBox.question(
+                self,
+                'Project exists',
+                'This folder already contains a Syntagmax project. Open it instead?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.open_path(str(target))
+            return
+
+        # R4: guard the non-empty inspection against OS/permission errors (E3).
+        try:
+            non_empty = target.is_dir() and any(target.iterdir())
+        except OSError as exc:
+            QMessageBox.critical(self, 'Access error', f'Cannot access folder: {exc}')
+            return
+
+        # R4: default to No so an accidental keypress never scaffolds (P6).
+        if non_empty:
+            answer = QMessageBox.warning(
+                self,
+                'Folder not empty',
+                'This folder is not empty and is not a Syntagmax project. '
+                'Create a project here anyway?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        QMetaObject.invokeMethod(
+            self._worker,
+            'createProject',
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, str(target)),
+        )
+
+    def reveal_project_folder(self) -> None:
+        """Open the current project root in the OS file manager (R5b, read-only)."""
+        if self._current_path is None:
+            return
+        root = self._project_root_for(self._current_path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(root))
 
     @staticmethod
     def _project_root_for(path: str) -> str:
@@ -276,11 +352,13 @@ class MainWindow(QMainWindow):
             self._current_path = None
             self._set_panels_enabled(False)
             self._reload_action.setEnabled(False)
+            self._reveal_action.setEnabled(False)
             self._set_branch_bar_visible(False)
             return
 
         self._set_panels_enabled(True)
         self._reload_action.setEnabled(True)
+        self._reveal_action.setEnabled(True)
         self._populate_branches()
         if self._current_path is not None:
             self._remember_recent(self._current_path)
@@ -290,6 +368,18 @@ class MainWindow(QMainWindow):
         # on the worker thread (R7, H-1); without this the trace panel is inert.
         QMetaObject.invokeMethod(self._worker, 'runAtypes', Qt.ConnectionType.QueuedConnection)
         self._status_label.setText(f'Opened {self._current_path}')
+
+    @Slot(str)
+    def _on_created(self, config_path: str) -> None:
+        """Open the freshly scaffolded project through the normal flow (R5, R6, E9).
+
+        The project *root* (the parent of ``.syntagmax``) is passed to
+        ``open_path`` rather than the raw ``config.toml`` path, so the MRU stores
+        a folder, consistent with folder-based opens; ``core_facade.open``
+        resolves it back to the config.
+        """
+        root = Path(config_path).parent.parent  # <root>/.syntagmax/config.toml -> <root>
+        self.open_path(str(root))
 
     @Slot(object)
     def _on_atypes_ready(self, atypes: object) -> None:
@@ -312,8 +402,13 @@ class MainWindow(QMainWindow):
         disabled while a run is in flight, so secondary requests cannot be queued
         behind a long analysis or trace.
         """
+        self._new_action.setEnabled(not busy)
         self._open_action.setEnabled(not busy)
         self._reload_action.setEnabled(not busy and self._current_path is not None)
+        self._reveal_action.setEnabled(not busy and self._current_path is not None and self._project_open)
+        # Disable the Recent Projects menu too, so a recent re-open cannot be
+        # queued behind an in-flight run and overwrite the current path (M-1).
+        self._recent_menu.setEnabled(not busy and bool(self._settings_store.recent_projects()))
         self._branch_combo.setEnabled(not busy and not self._branch_detached)
         # While busy, mask the panel stack; when idle, restore it to the
         # project-open state (disabled in the empty state) rather than

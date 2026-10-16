@@ -100,3 +100,29 @@ def test_query_filters_by_atype(session):
 def test_search_passthrough(session):
     results = core_facade.search(session, 'REQ')
     assert isinstance(results, list)
+
+
+
+def test_create_scaffolds_and_opens(tmp_path: Path):
+    target = tmp_path / 'demo'
+    config_path = core_facade.create(target)
+
+    assert config_path == (target / '.syntagmax' / 'config.toml').resolve()
+    assert (target / '.syntagmax' / 'config.toml').is_file()
+    assert (target / '.syntagmax' / 'project.syntagmax').is_file()
+    assert (target / '.syntagmax' / '.gitignore').is_file()
+    assert (target / 'REQ').is_dir()
+
+    # The created project opens cleanly through the normal facade path.
+    session = core_facade.open(target)
+    assert session is not None
+    core_facade.analyse(session)
+
+
+def test_create_refuses_existing_project(tmp_path: Path):
+    from syntagmax.errors import FatalError
+
+    target = tmp_path / 'demo'
+    core_facade.create(target)
+    with pytest.raises(FatalError):
+        core_facade.create(target)
