@@ -1498,7 +1498,7 @@ dev = [
 
 [[package]]
 name = "syntagmax-desktop"
-version = "2026.10.10"
+version = "2026.10.16"
 source = { editable = "." }
 dependencies = [
     { name = "gitpython" },

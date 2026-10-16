@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Calendar Versioning](https://calver.org/) with the scheme `YYYY.M.D`, matching the Syntagmax core.
 
+## [2026.10.16] - 2026-10-16
+
+### Added
+
+- **New Project**: scaffold a fresh Syntagmax project from the desktop app (File → New Project…, `Ctrl+N`, or the toolbar) via the core's new `syntagmax.api.create_project`. It writes the `.syntagmax/` configuration, a starter metamodel, a `.gitignore`, and a default `REQ/` input directory, then opens the new project. A folder picker guards against overwriting an existing project (detected at either `.syntagmax/config.toml` or a flat `config.toml`) and warns before scaffolding into a non-empty folder. The scaffold runs off the UI thread and rolls back atomically if a write fails; it writes files only and never runs `git init`, commits, or pushes.
+- **Reveal Project Folder**: a read-only File-menu action that opens the current project's root in the operating system file manager.
+- A first-run hint in the Browser directs the reviewer to add Markdown specification files under `REQ/` when a freshly scaffolded project has no artifacts yet.
+
+### Changed
+
+- The New, Open, Reload, and Recent Projects controls are disabled while a background operation is in flight, so a second request cannot be queued behind an in-flight one.
+- Recent Projects records the project root directory rather than the internal `.syntagmax/config.toml` path, consistent with folder-based opens.
+
+### Fixed
+
+- The core's `init` starter metamodel template declared `attribute id is mandatory string`, which the metamodel validator rejected, so a freshly initialised project could not be opened or analysed; corrected to `id is string` (via the `syntagmax` core).
+
 ## [2026.10.10] - 2026-10-10
 
 ### Added
